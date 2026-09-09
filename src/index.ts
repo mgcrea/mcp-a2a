@@ -12,7 +12,7 @@ export {
   startChannelWatcher,
 } from "#/channel";
 export type { ChannelWatcher } from "#/channel";
-export { PeerClient, isTerminal, normalizeBase } from "#/client/peer";
+export { PeerClient, normalizeBase } from "#/client/peer";
 export type { PeerClientOptions, PeerSummary } from "#/client/peer";
 export { createA2AFetch } from "#/client/fetch";
 export {
@@ -27,6 +27,7 @@ export {
 export {
   SHORT_STATES,
   describeTask,
+  messageText,
   proposalFor,
   shortState,
   stateFromShort,

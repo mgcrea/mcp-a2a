@@ -7,7 +7,6 @@ import {
   RestTransportFactory,
   Role,
   Task,
-  TaskState,
   type A2APeerClient,
   type AgentCard,
 } from "#/a2a";
@@ -348,13 +347,6 @@ export const textPart = (text: string) => ({
 
 export const randomId = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-
-/** A terminal task needs no further watching; an interrupted one still does. */
-export const isTerminal = (state: TaskState): boolean =>
-  state === TaskState.TASK_STATE_COMPLETED ||
-  state === TaskState.TASK_STATE_FAILED ||
-  state === TaskState.TASK_STATE_CANCELED ||
-  state === TaskState.TASK_STATE_REJECTED;
 
 const readString = (card: Record<string, unknown> | undefined, key: string): string | undefined => {
   const value = card?.[key];

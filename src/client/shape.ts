@@ -19,7 +19,7 @@
 // tools return the parts inline, because reading the content is the point of a
 // get. Nothing is dropped silently — an omitted history says how long it was.
 
-import { TaskState, taskStateToJSON, type AgentCard, type Message, type Part } from "#/a2a";
+import { TaskState, taskStateToJSON, type AgentCard, type Message } from "#/a2a";
 import type { Direction, TaskRecord } from "#/store/tasks";
 
 type Rec = Record<string, unknown>;
@@ -65,42 +65,12 @@ export const stateFromShort = (short: ShortState): TaskState => {
   return map[short];
 };
 
-/**
- * A `Part` as one field rather than a oneof wrapper. Binary content is reported
- * by size and media type and never inlined — a base64 blob in a tool result is
- * pure cost, and the URL form is what a peer should have sent anyway.
- */
-export const summarizePart = (part: Part): Rec => {
-  const content = part.content;
-  const trailer = {
-    ...(part.filename ? { filename: part.filename } : {}),
-    ...(part.mediaType ? { media_type: part.mediaType } : {}),
-  };
-  if (content === undefined) return { empty: true, ...trailer };
-  switch (content.$case) {
-    case "text":
-      return { text: content.value, ...trailer };
-    case "data":
-      return { data: content.value, ...trailer };
-    case "url":
-      return { url: content.value, ...trailer };
-    case "raw":
-      return { bytes: content.value.byteLength, ...trailer };
-  }
-};
-
 /** Every text part of a message, joined. The half a model almost always wants. */
 export const messageText = (message: Message | undefined): string =>
   (message?.parts ?? [])
     .map((part) => (part.content?.$case === "text" ? part.content.value : ""))
     .filter((text) => text.length > 0)
     .join("\n");
-
-export const summarizeMessage = (message: Message): Rec => ({
-  message_id: message.messageId,
-  role: message.role === 2 ? "agent" : "user",
-  parts: message.parts.map(summarizePart),
-});
 
 /**
  * One row of `a2a_list_tasks` / `a2a_wait_for_task`. Deliberately without the

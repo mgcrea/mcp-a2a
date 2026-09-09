@@ -17,20 +17,6 @@ export const ok = (data: unknown): ToolResult => ({
   content: [{ type: "text", text: JSON.stringify(data ?? { ok: true }) }],
 });
 
-/**
- * Return text as-is. `ok()` JSON-stringifies, which turns a readable block into
- * one escaped "A2A task…\n\n…" line that no one can read.
- */
-export const okText = (text: string): ToolResult => ({
-  content: [{ type: "text", text }],
-});
-
-/**
- * `extra` is spread at the TOP level, not nested under `details`, so a `remedy`
- * lands beside the error rather than three levels inside an envelope. That
- * matters: the remedy is the half the model should act on, and a nested one gets
- * skimmed past.
- */
 export const fail = (message: string, extra?: Record<string, unknown>): ToolResult => ({
   content: [{ type: "text", text: JSON.stringify({ error: message, ...extra }) }],
   isError: true,
@@ -57,15 +43,6 @@ export const toFailure = (err: unknown): ToolResult => {
 export const wrap = async <T>(fn: () => Promise<T>): Promise<ToolResult> => {
   try {
     return ok(await fn());
-  } catch (err) {
-    return toFailure(err);
-  }
-};
-
-/** Like `wrap`, but the body chooses its own result shape (e.g. raw text). */
-export const wrapResult = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => {
-  try {
-    return await fn();
   } catch (err) {
     return toFailure(err);
   }
@@ -140,7 +117,3 @@ export const historyLengthArg = z
 export const confirmArg = z
   .literal(true)
   .describe("Must be true. Explicit acknowledgement that this destructively changes state.");
-
-/** Drop undefined values so we never send `{"filter": undefined}` upstream. */
-export const compact = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
-  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;

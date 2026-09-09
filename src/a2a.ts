@@ -18,15 +18,11 @@
  */
 
 export {
-  Artifact,
   ListTasksResponse,
   Message,
-  Part,
   Role,
   Task,
   TaskState,
-  TaskStatus,
-  roleToJSON,
   taskStateFromJSON,
   taskStateToJSON,
 } from "@a2a-js/sdk";
