@@ -293,8 +293,25 @@ export class FileTaskStore implements TaskStore {
 
   /** What changed against a baseline snapshot, with the records attached. */
   changesSince(baseline: StoreSnapshot, filter: { direction?: Direction } = {}): StoreChange[] {
+    return this.changesBetween(baseline, this.snapshot(), filter);
+  }
+
+  /**
+   * The same, between two snapshots the caller already holds.
+   *
+   * This exists because a poller that advances its baseline needs the SAME
+   * snapshot it compared against to become the next baseline. Taking a fresh one
+   * afterwards loses any write that landed in between — a lost wakeup, whose
+   * symptom is a task sitting unanswered while an agent waits out its full
+   * timeout, and which is invisible in a test because the window is microseconds.
+   */
+  changesBetween(
+    baseline: StoreSnapshot,
+    current: StoreSnapshot,
+    filter: { direction?: Direction } = {},
+  ): StoreChange[] {
     const changes: StoreChange[] = [];
-    for (const [taskId, mtime] of this.snapshot()) {
+    for (const [taskId, mtime] of current) {
       const before = baseline.get(taskId);
       if (before !== undefined && before >= mtime) continue;
       const record = this.readRecord(taskId);

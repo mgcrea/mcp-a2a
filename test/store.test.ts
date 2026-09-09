@@ -222,6 +222,26 @@ describe("FileTaskStore", () => {
     expect(s.changesSince(s.snapshot())).toEqual([]);
   });
 
+  /**
+   * The property both pollers rely on: a poller must be able to advance its
+   * baseline to the SAME snapshot it compared against. Taking a fresh one loses
+   * whatever landed in between, and a lost wakeup means a task sits unanswered
+   * while an agent waits out its whole timeout.
+   */
+  it("compares two snapshots the caller already holds, so no write is lost", () => {
+    const s = store();
+    const baseline = s.snapshot();
+    s.put(task("t1"), { direction: "inbound", peer: "a" });
+
+    const current = s.snapshot();
+    // A write landing here — after the snapshot the poller will keep — must be
+    // reported on the NEXT pass, not swallowed by a newer baseline.
+    s.put(task("t2"), { direction: "inbound", peer: "b" });
+
+    expect(s.changesBetween(baseline, current).map((c) => c.taskId)).toEqual(["t1"]);
+    expect(s.changesBetween(current, s.snapshot()).map((c) => c.taskId)).toEqual(["t2"]);
+  });
+
   it("ignores a record it cannot read instead of failing the whole listing", () => {
     const dir = tempStateDir();
     const s = new FileTaskStore({ stateDir: dir, defaultDirection: "inbound" });

@@ -126,6 +126,9 @@ export const registerTaskTools = (server: McpServer, ctx: ToolContext): void => 
         const startedAt = Date.now();
 
         if (include_pending) {
+          // Inbound by default even though the wait below watches both: a
+          // "pending" task is one demanding an answer, and an outbound task in
+          // SUBMITTED is just work you delegated that nobody has picked up yet.
           const pending = ctx.store
             .records({ direction: direction ?? "inbound" })
             .filter((record) => readState(record) === TaskState.TASK_STATE_SUBMITTED);
@@ -141,7 +144,13 @@ export const registerTaskTools = (server: McpServer, ctx: ToolContext): void => 
           }
         }
 
-        let baseline = ctx.store.snapshot();
+        // ONE baseline for the whole wait, never advanced. Re-snapshotting each
+        // pass would fold a write that landed since the comparison into the new
+        // baseline and lose it — and a lost wakeup here means a task sits
+        // unanswered while the caller blocks for its full timeout. Nothing
+        // unchanged can accumulate, because an unchanged file never differs from
+        // the baseline.
+        const baseline = ctx.store.snapshot();
         const deadline = startedAt + seconds * 1000;
         while (Date.now() < deadline) {
           await sleep(Math.min(ctx.config.pollIntervalMs, Math.max(deadline - Date.now(), 1)));
@@ -155,7 +164,6 @@ export const registerTaskTools = (server: McpServer, ctx: ToolContext): void => 
               ),
             };
           }
-          baseline = ctx.store.snapshot();
         }
 
         return {

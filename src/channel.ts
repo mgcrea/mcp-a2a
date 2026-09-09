@@ -73,8 +73,12 @@ export const startChannelWatcher = (opts: {
     if (inFlight) return;
     inFlight = true;
     try {
-      const changes = store.changesSince(baseline, { direction: "inbound" });
-      baseline = store.snapshot();
+      // One snapshot, used both to find the changes and as the next baseline.
+      // Taking a fresh baseline afterwards would swallow anything written in
+      // between, and a swallowed arrival is a push that never happens.
+      const current = store.snapshot();
+      const changes = store.changesBetween(baseline, current, { direction: "inbound" });
+      baseline = current;
       for (const change of changes) {
         // Only an arrival is pushed. A state change on an inbound task is this
         // session's own answer coming back around, and telling an agent about
