@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The A2A peer daemon as a user LaunchAgent.
+
+  Why launchd rather than letting a client spawn it: an inbound listener has to
+  outlive any one client. A Bastion-supervised child is stopped after 30 idle
+  minutes and dies with the app; a client-spawned stdio server comes and goes
+  with the editor window. Neither can hold a port.
+
+  This is an EXAMPLE. Copy it, substitute the three placeholders, and install:
+
+    sed -e "s|__NODE__|$(command -v node)|" \
+        -e "s|__DIST__|$PWD/dist/serve.js|" \
+        -e "s|__TOKEN__|$(openssl rand -hex 32)|" \
+        launchd/io.mgcrea.mcp-a2a.plist.example \
+        > ~/Library/LaunchAgents/io.mgcrea.mcp-a2a.plist
+    chmod 600 ~/Library/LaunchAgents/io.mgcrea.mcp-a2a.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.mgcrea.mcp-a2a.plist
+
+  Then give every CLIENT the same A2A_TOKEN, or they will all get 401.
+
+  Restart after a rebuild:  launchctl kickstart -k gui/$(id -u)/io.mgcrea.mcp-a2a
+  Stop and remove:          launchctl bootout gui/$(id -u)/io.mgcrea.mcp-a2a
+  Read its log:             tail -f /tmp/mcp-a2a-serve.log
+
+  ⚠ The token is in this file in plaintext, which is why it is chmod 600 and why
+    the file itself is gitignored. launchd has no keychain integration; the
+    alternative is a wrapper script that reads one, and that trades a readable
+    file for a readable script.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>io.mgcrea.mcp-a2a</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>__NODE__</string>
+      <string>__DIST__</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <!-- Loopback only. A non-loopback URL is refused at startup, not bound. -->
+      <key>A2A_DAEMON_URL</key>
+      <string>http://127.0.0.1:41241</string>
+      <key>A2A_TOKEN</key>
+      <string>__TOKEN__</string>
+      <key>A2A_AGENT_NAME</key>
+      <string>local coding agents</string>
+      <!--
+        Deliberately NOT set: the default (~/.local/state/mcp-a2a) is what every
+        client resolves too. Two halves with two different state directories hold
+        two disjoint stores, and no task ever crosses.
+      -->
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Come back if it crashes; it holds the only inbound path. -->
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Never throttle a restart loop into silence. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- stderr is the whole diagnostic surface; stdout carries nothing here. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/mcp-a2a-serve.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/mcp-a2a-serve.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+  </dict>
+</plist>

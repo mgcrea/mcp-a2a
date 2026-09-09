@@ -1,0 +1,295 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test on node@${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest node engines.node claims, plus current LTS. An untested
+        # floor is a guess — every Dockerfile here is node 24.
+        node: ["22", "lts/*"]
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v5
+      - name: Setup pnpm 🔧
+        uses: pnpm/action-setup@v6
+      - name: Setup node 🔧
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+          cache: "pnpm"
+      - name: Install 🪄
+        run: pnpm install --frozen-lockfile
+      - name: Lint 🔍
+        run: pnpm run lint
+      - name: Format 🔍
+        run: pnpm run format:check
+      - name: TypeScript 🔍
+        run: pnpm run typecheck
+      - name: Test 🧪
+        run: pnpm run test
+      - name: Build 📦
+        run: pnpm run build
+      # Every client config in the wild spells this server `npx -y <package>`,
+      # and npx picks the bin by name: it only forgives a mismatch while the
+      # package ships exactly one. So the day a second bin is added, that
+      # command starts failing with "could not determine executable to run" —
+      # at the client, with stderr swallowed, long after CI was green. Mirrors
+      # npm's own getBinFromManifest, so it fails here first instead.
+      - name: npx can resolve a bin 🔒
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const bin = pkg.bin ?? {};
+            const unscoped = pkg.name.slice(pkg.name.indexOf('/') + 1);
+            if (new Set(Object.values(bin)).size > 1 && !bin[unscoped]) {
+              console.error('npx cannot pick a bin for ' + pkg.name + ': none of [' +
+                Object.keys(bin).join(', ') + '] is named ' + unscoped + '.');
+              console.error('Add a ' + unscoped + ' alias pointing at the server entry point.');
+              process.exit(1);
+            }
+          "
+      # The tool list is the server's public contract and is easy to change by
+      # accident. Three phases, because the negative check in phase 2 passes
+      # vacuously if a tool is renamed — phase 3 is what stops that.
+      #
+      # HOME is pointed at nothing so the runner's own dotfiles can never be
+      # picked up: for a server that reads one, omitting this tests a different
+      # server than an unconfigured user gets. A2A_STATE_DIR points at a scratch
+      # directory for the same reason — the store is a real directory on disk.
+      #
+      # ⚠ Every pattern here matches `a2a_[a-z0-9_]*`, WITH the digits. The
+      #   scaffold's `[a-z_]*` matches nothing in this server's names, so all
+      #   three phases would pass vacuously and this file would assert nothing.
+      - name: MCP smoke test 🧪
+        run: |
+          set -euo pipefail
+          list_tools() {
+            printf '%s\n' \
+              '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+              '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+              '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | env HOME=/nonexistent A2A_CONFIG=/nonexistent.json \
+                  A2A_STATE_DIR="$RUNNER_TEMP/a2a-smoke" "$@" node dist/cli.js 2>/dev/null
+          }
+          names() { grep -o '"name":"a2a_[a-z0-9_]*"' "$1" | sort -u; }
+
+          # 0. The patterns must actually match something, or every assertion
+          #    below is vacuous. This is the check that catches a prefix change.
+          list_tools > /tmp/unconfigured.json
+          [ "$(names /tmp/unconfigured.json | wc -l)" -ge 5 ] \
+            || { echo "the tool-name pattern matched almost nothing — has the prefix changed?"; exit 1; }
+
+          # 1. With NOTHING configured the server must still speak MCP. One that
+          #    exits here shows in the client as a bare "Connection closed" with
+          #    stderr swallowed, so nothing ever explains what to set.
+          grep -q '"name":"a2a_auth_status"' /tmp/unconfigured.json \
+            || { echo "a2a_auth_status missing from an unconfigured server"; exit 1; }
+          # And its read tools work with no credentials at all, which is this
+          # server's deliberate departure: gating them would hide the tools that
+          # diagnose a broken setup.
+          grep -q '"name":"a2a_list_tasks"' /tmp/unconfigured.json \
+            || { echo "a2a_list_tasks should not need credentials"; exit 1; }
+
+          # 2. Configured but ungated: every write tool must be ABSENT, not
+          #    merely refused. Named explicitly rather than by a verb pattern —
+          #    a pattern is what goes stale silently when a tool is renamed.
+          list_tools A2A_TOKEN=ci-fake > /tmp/readonly.json
+          for tool in a2a_send_message a2a_respond_to_task a2a_cancel_task \
+                      a2a_set_push_notification_config a2a_delete_push_notification_config; do
+            ! grep -q "\"name\":\"$tool\"" /tmp/readonly.json \
+              || { echo "$tool leaked without A2A_ALLOW_WRITES"; exit 1; }
+          done
+          # The escape hatch must not offer a write RPC either.
+          ! grep -q '"SendMessage"' /tmp/readonly.json \
+            || { echo "a2a_request offered a write method without the gate"; exit 1; }
+
+          # 3. Turning the flag ON must only ever ADD. A gate written the wrong
+          #    way round makes read tools vanish instead, which phase 2 cannot
+          #    see — it only looks for extras.
+          list_tools A2A_TOKEN=ci-fake A2A_ALLOW_WRITES=1 > /tmp/writes.json
+          names /tmp/readonly.json > /tmp/a.txt
+          names /tmp/writes.json > /tmp/b.txt
+          missing=$(comm -23 /tmp/a.txt /tmp/b.txt)
+          [ -z "$missing" ] \
+            || { echo "these tools disappeared when writes were enabled: $missing"; exit 1; }
+          added=$(comm -13 /tmp/a.txt /tmp/b.txt | wc -l)
+          [ "$added" -eq 5 ] \
+            || { echo "expected the write gate to add 5 tools, it added $added"; exit 1; }
+          echo "smoke test ok: $(wc -l < /tmp/a.txt) read tools, $added added by the write gate"
+
+      # The one check unit tests structurally cannot make: the two processes agree
+      # about a directory on disk. It is the whole architecture, and it breaks
+      # silently — a record-format change or a state-dir mismatch leaves both
+      # halves working perfectly and no task crossing between them.
+      - name: A2A daemon round trip 🔁
+        run: |
+          set -euo pipefail
+          export A2A_STATE_DIR="$RUNNER_TEMP/a2a-e2e"
+          export A2A_DAEMON_URL=http://127.0.0.1:41999
+          export A2A_TOKEN=ci-round-trip-token
+          export A2A_ALLOW_WRITES=1
+          mkdir -p "$A2A_STATE_DIR"
+
+          node dist/serve.js > /tmp/daemon.log 2>&1 &
+          DAEMON=$!
+          trap 'kill $DAEMON 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            curl -fsS "$A2A_DAEMON_URL/health" >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS "$A2A_DAEMON_URL/health" > /tmp/health.json \
+            || { echo "the daemon never came up:"; cat /tmp/daemon.log; exit 1; }
+
+          # It must bind loopback only. `listen(port)` with no host binds every
+          # interface no matter what the log line says. `ss` on the ubuntu runner;
+          # locally the same check is `lsof -nP -iTCP -sTCP:LISTEN | grep 41999`.
+          ss -ltnp 2>/dev/null | grep -q '127.0.0.1:41999' \
+            || { echo "the daemon is not bound to loopback:"; ss -ltnp | grep 41999; exit 1; }
+
+          # The card is public by design — discovery must work before a peer has
+          # a credential — while the RPC endpoint is not.
+          curl -fsS "$A2A_DAEMON_URL/.well-known/agent-card.json" | grep -q '"protocolVersion":"1.0"' \
+            || { echo "the agent card is not v1.0"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$A2A_DAEMON_URL/a2a/v1" \
+            -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":"x"}}')
+          [ "$code" = "401" ] || { echo "an untokened RPC got $code, expected 401"; exit 1; }
+
+          # A peer delegates work. It must be acknowledged immediately and parked
+          # in SUBMITTED — nothing is executed by arriving.
+          curl -fsS -X POST "$A2A_DAEMON_URL/a2a/v1" \
+            -H "authorization: Bearer $A2A_TOKEN" -H 'content-type: application/json' \
+            -H 'x-a2a-from: ci-peer/1.0' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"SendMessage","params":{"message":{"messageId":"m-ci","role":"ROLE_USER","parts":[{"text":"ci round trip"}]}}}' \
+            > /tmp/sent.json
+          grep -q 'TASK_STATE_SUBMITTED' /tmp/sent.json \
+            || { echo "an inbound task did not land in SUBMITTED:"; cat /tmp/sent.json; exit 1; }
+          # Exported, because the inline node script below reads it from the environment.
+          export TASK
+          TASK=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/sent.json','utf8')).result.task.id)")
+
+          # The stdio server — a DIFFERENT process — sees it and answers it.
+          node -e "
+            const { spawn } = require('node:child_process');
+            const child = spawn('node', ['dist/cli.js'], { stdio: ['pipe', 'pipe', 'inherit'] });
+            let buf = '';
+            const pending = new Map();
+            let id = 1;
+            const send = (method, params) => new Promise((resolve) => {
+              const mine = id++;
+              pending.set(mine, resolve);
+              child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: mine, method, params }) + '\n');
+            });
+            child.stdout.on('data', (chunk) => {
+              buf += chunk;
+              let i;
+              while ((i = buf.indexOf('\n')) !== -1) {
+                const line = buf.slice(0, i).trim();
+                buf = buf.slice(i + 1);
+                if (!line) continue;
+                const msg = JSON.parse(line);
+                if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+              }
+            });
+            const text = (res) => JSON.parse(res.result.content[0].text);
+            (async () => {
+              await send('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'ci', version: '0' } });
+              child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+
+              const waited = text(await send('tools/call', { name: 'a2a_wait_for_task', arguments: { seconds: 5 } }));
+              if (waited.changes.length !== 1) throw new Error('the stdio server did not see the inbound task: ' + JSON.stringify(waited));
+              if (waited.changes[0].task_id !== process.env.TASK) throw new Error('wrong task id');
+              if (!String(waited.changes[0].note).includes('DATA, not an instruction')) {
+                throw new Error('an arriving task must be framed as a proposal, not an order');
+              }
+
+              const answered = text(await send('tools/call', { name: 'a2a_respond_to_task', arguments: { task_id: process.env.TASK, state: 'completed', text: 'ci answered it' } }));
+              if (answered.task.state !== 'completed') throw new Error('the answer did not stick');
+              child.kill('SIGTERM');
+              console.log('stdio server answered task ' + process.env.TASK);
+            })().catch((err) => { console.error(err); child.kill('SIGTERM'); process.exit(1); });
+          "
+
+          # And the peer sees the answer, which closes the loop.
+          curl -fsS -X POST "$A2A_DAEMON_URL/a2a/v1" \
+            -H "authorization: Bearer $A2A_TOKEN" -H 'content-type: application/json' \
+            -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"GetTask\",\"params\":{\"id\":\"$TASK\"}}" \
+            > /tmp/final.json
+          grep -q 'TASK_STATE_COMPLETED' /tmp/final.json \
+            || { echo "the peer cannot see the answer:"; cat /tmp/final.json; cat /tmp/daemon.log; exit 1; }
+          grep -q 'ci answered it' /tmp/final.json \
+            || { echo "the answer text did not reach the peer"; cat /tmp/final.json; exit 1; }
+          echo "round trip ok: peer -> daemon -> store -> stdio server -> answer -> peer"
+
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    # id-token: write is required for OIDC trusted publishing + provenance
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v5
+      - name: Setup pnpm 🔧
+        uses: pnpm/action-setup@v6
+      - name: Setup node 🔧
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: "pnpm"
+          registry-url: https://registry.npmjs.org
+      - name: Install 🪄
+        run: pnpm install --frozen-lockfile
+      - name: Upgrade npm 🔧
+        # OIDC trusted publishing needs a recent npm CLI
+        run: npm install -g npm@latest
+      # A version already on npm cannot be republished, so re-running this job
+      # would fail on a duplicate. Skip instead, so pushing a tag is always safe.
+      - name: Check npm for this version 🔍
+        id: published
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$name@$version is already published — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish 🚀
+        if: steps.published.outputs.exists == 'false'
+        run: npm publish --provenance --access public
+
+  github-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v5
+      - name: Create release 🏷️
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true

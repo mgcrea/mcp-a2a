@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage
+.idea
+.mcp.json
+tokens.json
+
+# The installed LaunchAgent holds A2A_TOKEN in plaintext; only the example is tracked.
+*.plist
+!launchd/*.plist.example
+# The task store, if anyone points A2A_STATE_DIR at the repo while debugging.
+state/

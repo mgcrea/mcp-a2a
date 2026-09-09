@@ -1,0 +1,29 @@
+{
+  "$comment": [
+    "Two halves. The DAEMON is a separate long-lived process — a LaunchAgent, or",
+    "`a2a-serve` in a terminal — and is NOT started by this file: an inbound",
+    "listener has to outlive any one client, which a client-spawned stdio server",
+    "cannot. See the README.",
+    "",
+    "Every client here needs the SAME A2A_TOKEN as the daemon, and must leave",
+    "A2A_STATE_DIR alone so both halves resolve the same store.",
+    "",
+    "For the claude/channel push, start Claude Code with",
+    "  claude --dangerously-load-development-channels server:a2a",
+    "and confirm the dialog. Do NOT also pass --channels for the same entry: the",
+    "bypass is per-entry and the --channels copy is refused as not on the",
+    "allowlist. In -p mode nothing is delivered at all, which looks like a bug",
+    "and is not one — use a2a_wait_for_task there."
+  ],
+  "mcpServers": {
+    "a2a": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-a2a/dist/cli.js"],
+      "env": {
+        "A2A_DAEMON_URL": "http://127.0.0.1:41241",
+        "A2A_TOKEN": "the same value the daemon was started with",
+        "A2A_ALLOW_WRITES": ""
+      }
+    }
+  }
+}
