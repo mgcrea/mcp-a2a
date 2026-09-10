@@ -57,7 +57,12 @@ describe("FileTaskStore construction", () => {
     // And it says so, which is what `a2a_auth_status` surfaces.
     const diagnosis = s.diagnose();
     expect(diagnosis.writable).toBe(false);
-    expect(String(diagnosis.error)).toContain("ENOENT");
+    // The property, not the errno: `/nonexistent` is ENOENT on macOS and EACCES
+    // on a Linux CI runner (it cannot create a directory at the root), and both
+    // mean the same thing here. Asserting the code made this pass locally and
+    // fail in CI, which is the worse of the two ways to be wrong.
+    expect(diagnosis.error).toBeTruthy();
+    expect(diagnosis.dir).toContain("/nonexistent");
   });
 
   it("fails a WRITE with a remedy naming the variable to change", () => {
