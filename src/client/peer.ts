@@ -279,11 +279,10 @@ export class PeerClient {
     });
     const text = await res.text();
     if (!res.ok) {
+      const remedy = remedyForStatus(res.status, this.opts.token !== undefined);
       throw new A2AApiError(`${iface.url} answered HTTP ${res.status}: ${text.slice(0, 400)}`, {
         status: res.status,
-        ...(remedyForStatus(res.status, this.opts.token !== undefined)
-          ? { remedy: remedyForStatus(res.status, this.opts.token !== undefined) as string }
-          : {}),
+        ...(remedy ? { remedy } : {}),
       });
     }
     try {
