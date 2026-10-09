@@ -242,7 +242,7 @@ The Codex session reads it with `a2a_get_task(task_id: "8a120b77-…", refresh: 
   says so; re-issue it.
 - **The channel push is delivered only to an interactive Claude Code session that
   opted in.** In `-p` mode the debug log reads `pollChannel=false
-nonInteractive=true` and nothing arrives, which looks like a bug and is not
+  nonInteractive=true` and nothing arrives, which looks like a bug and is not
   one. Start it with `--dangerously-load-development-channels server:a2a` and
   confirm the dialog; do **not** also pass `--channels` for the same entry, as
   the bypass is per-entry and the `--channels` copy is refused as not on the
